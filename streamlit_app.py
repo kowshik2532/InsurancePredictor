@@ -4,15 +4,15 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import io
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, accuracy_score
+from sklearn.metrics import mean_squared_error, accuracy_score, r2_score
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
 import openai
+import os
 
 # Set OpenAI API Key
-openai.api_key = "your-api-key-here"  # ❗Replace with your actual API key or use environment variables for security.
+openai.api_key = os.getenv("OPENAI_API_KEY")  # Use environment variable for security
 
 # Page config
 st.set_page_config(page_title="PremiumPredict", layout="wide")
@@ -22,7 +22,7 @@ st.title("🏥 Health Insurance Premium Predictor")
 uploaded_file = st.file_uploader("📂 Browse your CSV file", type=["csv"])
 
 # Initialize session state
-for key in ["show_summary", "show_eda", "show_custom_vis", "build_model", "chat_with_your_ds"]:
+for key in ["show_summary", "show_eda", "show_custom_vis", "build_model", "chat_with_your_ds", "show_predict_form"]:
     if key not in st.session_state:
         st.session_state[key] = False
 
@@ -64,7 +64,7 @@ if uploaded_file:
         st.markdown(f"- **Columns:** {df_raw.shape[1]}")
 
         st.subheader("🧱 Data Types")
-        st.dataframe(df_raw.dtypes.reset_index().rename(columns={"index": "Column", 0: "Data Type"}), use_container_width=True)
+        st.dataframe(df_raw.dtypes.to_frame(name="Data Type").reset_index().rename(columns={"index": "Column"}), use_container_width=True)
 
         st.subheader("🧩 Missing Values")
         missing = df_raw.isnull().sum()
@@ -75,7 +75,7 @@ if uploaded_file:
             st.info("✅ No missing values detected.")
 
         st.subheader("📊 Descriptive Statistics")
-        st.dataframe(df_raw.describe(include='all'), use_container_width=True)
+        st.dataframe(df_raw.describe(include='all').transpose(), use_container_width=True)
 
         if st.button("🧼 Clean Data"):
             df_cleaned = clean_data(df_raw)
@@ -83,6 +83,73 @@ if uploaded_file:
             st.success("✅ Data cleaned successfully!")
             st.write("### 🔍 Cleaned Data Preview")
             st.dataframe(df_cleaned.head(), use_container_width=True)
+
+    # EDA
+    if st.session_state.show_eda:
+        st.subheader("🔍 Exploratory Data Analysis (EDA)")
+        categorical_cols = df_raw.select_dtypes(include='object').columns
+        st.markdown("#### 🎯 Categorical Variable Distributions")
+        for col in categorical_cols:
+            st.markdown(f"**{col}**")
+            st.bar_chart(df_raw[col].value_counts())
+
+        st.markdown("#### 📌 Correlation Matrix (Numeric Columns)")
+        corr = df_raw.select_dtypes(include='number').corr()
+        if not corr.empty:
+            st.dataframe(corr, use_container_width=True)
+            fig, ax = plt.subplots()
+            sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
+            plt.tight_layout()
+            st.pyplot(fig)
+        else:
+            st.warning("No numeric columns to compute correlation.")
+
+        st.markdown("#### 📈 Histograms for Numeric Columns")
+        for col in df_raw.select_dtypes(include='number').columns:
+            fig, ax = plt.subplots()
+            sns.histplot(df_raw[col].dropna(), kde=True, ax=ax)
+            ax.set_title(f"Distribution of {col}")
+            plt.tight_layout()
+            st.pyplot(fig)
+
+    # Custom Viz
+    if st.session_state.show_custom_vis:
+        st.subheader("🎨 Custom Data Visualization")
+        col_opts = df_raw.columns.tolist()
+        x_axis = st.selectbox("Select X-axis:", col_opts)
+        y_axis = st.selectbox("Select Y-axis (optional):", ["None"] + col_opts)
+        chart_type = st.selectbox("Choose Chart Type:", ["Scatter", "Bar", "Line", "Histogram", "Boxplot"])
+
+        if st.button("📊 Visualize"):
+            fig, ax = plt.subplots()
+            try:
+                if chart_type == "Scatter":
+                    if y_axis != "None":
+                        sns.scatterplot(data=df_raw, x=x_axis, y=y_axis, ax=ax)
+                    else:
+                        st.error("Scatter plot requires both X and Y.")
+                elif chart_type == "Bar":
+                    if y_axis != "None":
+                        sns.barplot(data=df_raw, x=x_axis, y=y_axis, ax=ax)
+                    else:
+                        df_raw[x_axis].value_counts().plot(kind="bar", ax=ax)
+                elif chart_type == "Line":
+                    if y_axis != "None":
+                        sns.lineplot(data=df_raw, x=x_axis, y=y_axis, ax=ax)
+                    else:
+                        st.error("Line plot requires both X and Y.")
+                elif chart_type == "Histogram":
+                    sns.histplot(df_raw[x_axis].dropna(), kde=True, ax=ax)
+                elif chart_type == "Boxplot":
+                    if y_axis != "None":
+                        sns.boxplot(data=df_raw, x=x_axis, y=y_axis, ax=ax)
+                    else:
+                        sns.boxplot(data=df_raw, y=x_axis, ax=ax)
+                ax.set_title(f"{chart_type} of {x_axis}" + (f" vs {y_axis}" if y_axis != "None" else ""))
+                plt.tight_layout()
+                st.pyplot(fig)
+            except Exception as e:
+                st.error(f"Error creating visualization: {str(e)}")
 
     # ML Model
     if st.session_state.build_model:
@@ -98,21 +165,6 @@ if uploaded_file:
 
         target_col = st.selectbox("🎯 Select Target Column", df_cleaned.columns)
 
-        # Check if target is continuous or categorical
-        if df_cleaned[target_col].dtype in ['float64', 'int64']:
-            task_type = "Regression"
-        else:
-            task_type = "Classification"
-
-        st.write(f"#### 🧠 Task Type: {task_type}")
-
-        # If regression, select regression model; if classification, select classification model
-        if task_type == "Regression":
-            algo_choice = st.selectbox("🤖 Choose ML Algorithm", ["Linear Regression", "Decision Tree Regressor", "Random Forest Regressor"])
-        else:
-            algo_choice = st.selectbox("🤖 Choose ML Algorithm", ["Logistic Regression", "Decision Tree Classifier", "Random Forest Classifier"])
-
-        # Feature selection
         if df_cleaned[target_col].dtype in ['float64', 'int64']:
             corr_matrix = df_cleaned.select_dtypes(include='number').corr()
             corr_with_target = corr_matrix[target_col].abs().sort_values(ascending=False)
@@ -129,50 +181,82 @@ if uploaded_file:
         X = df_cleaned[top_features]
         y = df_cleaned[target_col]
 
-        # Feature Scaling
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        algo_choice = st.selectbox("🤖 Choose ML Algorithm", ["Linear Regression", "Decision Tree", "Random Forest", "Logistic Regression"])
 
         if st.button("🚀 Train Model"):
-            X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+            is_classification = y.nunique() <= 10 and y.dtype in ['int64', 'object']
 
             if algo_choice == "Linear Regression":
                 model = LinearRegression()
-            elif algo_choice == "Decision Tree Regressor":
-                model = DecisionTreeRegressor()
-            elif algo_choice == "Random Forest Regressor":
-                model = RandomForestRegressor()
             elif algo_choice == "Logistic Regression":
                 model = LogisticRegression(max_iter=1000)
-            elif algo_choice == "Decision Tree Classifier":
-                model = DecisionTreeClassifier()
-            elif algo_choice == "Random Forest Classifier":
-                model = RandomForestClassifier()
+            elif algo_choice == "Decision Tree":
+                model = DecisionTreeClassifier() if is_classification else DecisionTreeRegressor()
+            elif algo_choice == "Random Forest":
+                model = RandomForestClassifier() if is_classification else RandomForestRegressor()
 
             model.fit(X_train, y_train)
-            predictions = model.predict(X_test)
+            st.session_state.model = model
+            st.session_state.X_columns = X.columns.tolist()
 
-            st.subheader("📉 Model Performance")
+            st.success("✅ Model trained successfully!")
 
-            if task_type == "Regression":
-                st.success(f"✅ R² (R-squared): {model.score(X_test, y_test):.4f}")
+            st.subheader("📊 Model Evaluation")
+            y_pred = model.predict(X_test)
 
+            if isinstance(model, (LinearRegression, DecisionTreeRegressor, RandomForestRegressor)):
+                r2 = r2_score(y_test, y_pred)
+                st.write(f"R-squared (R²): {r2:.4f}")
             else:
-                accuracy = accuracy_score(y_test, predictions)
-                st.success(f"✅ Accuracy: {accuracy:.4f}")
+                accuracy = accuracy_score(y_test, y_pred)
+                st.write(f"Accuracy: {accuracy:.4f}")
 
-            # Add input box for a new prediction
-            st.subheader("🔮 Make a Prediction")
-            input_data = []
-            for feature in top_features:
-                value = st.number_input(f"Enter value for {feature}", value=0.0)
-                input_data.append(value)
+        if "model" in st.session_state:
+            if st.button("Predict a custom case"):
+                st.session_state.show_predict_form = True
 
-            if st.button("🔍 Predict"):
-                input_scaled = scaler.transform([input_data])
-                prediction = model.predict(input_scaled)
+            if st.session_state.get("show_predict_form", False):
+                st.subheader("🔍 Predict on Custom Input")
+                input_data = {}
+                for feature in st.session_state.X_columns:
+                    val = st.text_input(f"Enter value for {feature}", value="0")
+                    try:
+                        input_data[feature] = float(val)
+                    except:
+                        input_data[feature] = val
 
-                if task_type == "Regression":
-                    st.write(f"🔮 Predicted Target Value: {prediction[0]:.4f}")
-                else:
-                    st.write(f"🔮 Predicted Target Class: {prediction[0]}")
+                if st.button("🧪 Predict"):
+                    input_df = pd.DataFrame([input_data])
+                    try:
+                        prediction = st.session_state.model.predict(input_df)[0]
+                        st.success(f"🧠 Predicted Value: {prediction}")
+                    except Exception as e:
+                        st.error(f"Prediction error: {e}")
+        else:
+            st.info("⚠️ Train a model first before making predictions.")
+
+    # Chat with dataset
+    if st.session_state.chat_with_your_ds:
+        st.subheader("💬 Chat with your Dataset")
+        user_input = st.text_input("Ask your dataset anything...")
+
+        if user_input:
+            if openai.api_key is None:
+                st.error("⚠️ OpenAI API key is not set. Please set the OPENAI_API_KEY environment variable.")
+            else:
+                try:
+                    response = openai.ChatCompletion.create(
+                        model="gpt-4",
+                        messages=[
+                            {"role": "system", "content": "You are a helpful data analyst."},
+                            {"role": "user", "content": user_input}
+                        ],
+                        max_tokens=300,
+                        temperature=0.5
+                    )
+                    st.write("### Response from AI:")
+                    st.write(response['choices'][0]['message']['content'].strip())
+                except Exception as e:
+                    st.error(f"Error while processing your query: {str(e)}")
