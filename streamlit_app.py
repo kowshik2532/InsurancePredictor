@@ -33,6 +33,8 @@ def clean_data(df):
     df_cleaned.columns = [col.strip().replace(" ", "_").lower() for col in df_cleaned.columns]
     return df_cleaned
 
+
+
 # If file is uploaded
 if uploaded_file:
     df_raw = pd.read_csv(uploaded_file)
@@ -121,7 +123,7 @@ if uploaded_file:
         chart_type = st.selectbox("Choose Chart Type:", ["Scatter", "Bar", "Line", "Histogram", "Boxplot"])
 
         if st.button("📊 Visualize"):
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
             try:
                 if chart_type == "Scatter":
                     if y_axis != "None":
@@ -145,11 +147,19 @@ if uploaded_file:
                         sns.boxplot(data=df_raw, x=x_axis, y=y_axis, ax=ax)
                     else:
                         sns.boxplot(data=df_raw, y=x_axis, ax=ax)
+
                 ax.set_title(f"{chart_type} of {x_axis}" + (f" vs {y_axis}" if y_axis != "None" else ""))
                 plt.tight_layout()
-                st.pyplot(fig)
+
+                # Place the figure inside a centered column to control width
+                col1, col2, col3 = st.columns([1, 6, 1])
+                with col2:
+                    st.pyplot(fig, clear_figure=True)
+
             except Exception as e:
                 st.error(f"Error creating visualization: {str(e)}")
+
+
 
     # ML Model
     if st.session_state.build_model:
